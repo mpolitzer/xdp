@@ -1,0 +1,4 @@
+/dev/cdrom      /media/cdrom         iso9660 noauto,ro 0 0
+/dev/usbdisk    /media/usb           vfat    noauto,ro 0 0
+/dev/sda	/var/lib/containers  ext4    defaults  0 0
+bpffs           /sys/fs/bpf          bpf     defaults  0 0

@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+root=$(realpath $(dirname $0))/..
+priv="$(command -v sudo && echo sudo || echo doas)"
+
+die() {
+    echo -en "$1" >&2
+    exit 1
+}
+cleanup() {
+	[ -n "$C" ] && (
+		buildah unmount $C
+		buildah rm $C
+	)
+	die "cleanup interrupted buildah"
+}
+# ..............................................................................
+buildr_init() {
+	C=$(buildah from alpine:latest)
+	buildah config --workingdir /root $C
+	trap cleanup 2
+	buildah run -v $PWD:/root $C -- sh -l <<- EOF
+		ln -s /usr/lib /usr/lib64
+		cat <<- EOF1 > /etc/apk/repositories
+			https://dl-cdn.alpinelinux.org/alpine/edge/main
+			https://dl-cdn.alpinelinux.org/alpine/edge/community
+			https://dl-cdn.alpinelinux.org/alpine/edge/testing
+			EOF1
+		apk update
+		apk upgrade
+		apk add \
+			bash \
+			bc \
+			bison \
+			build-base \
+			ca-certificates \
+			clang \
+			diffutils \
+			elfutils \
+			elfutils-dev \
+			flex \
+			gmp-dev \
+			iproute2 \
+			libcap-dev \
+			libnl3-dev \
+			linux-headers \
+			lua5.3-dev \
+			make \
+			ncurses-dev \
+			openssh-client \
+			openssl-dev \
+			pahole \
+			perl \
+			python3 \
+			rsync \
+			sed \
+			vis
+		make buildr-prepare
+	EOF
+	buildah commit $C xdp-buildr
+	buildah rm $C
+}
+buildr_run() {
+	podman image exists "xdp-buildr" || buildr_init
+	podman run \
+		--mount type=bind,source=$root,target=/root \
+		--rm -it --name xdp-buildr localhost/xdp-buildr "$@"
+}
+# ..............................................................................
+client_run() {
+	[ $(id -u) -ne 0 ] && die "NET_ADMIN cap is required, run as root\n"
+	podman image exists "xdp-buildr" || buildr_init
+	TERM=xterm-256color podman run --rm -it \
+		--cap-add NET_ADMIN \
+		--network br-lan \
+		-v $root:/root \
+		--name xdp-client localhost/xdp-buildr "$@"
+}
+# ..............................................................................
+server_run() {
+	[ $(id -u) -ne 0 ] && die "NET_ADMIN cap is required, run as root\n"
+	podman image exists "xdp-buildr" || buildr_init
+	TERM=xterm-256color podman run --rm -it \
+		--cap-add NET_ADMIN \
+		--network br-wan \
+		-v $root:/root \
+		--name xdp-server localhost/xdp-buildr "$@"
+}
+# ..............................................................................
+initrd_init() {
+	C=$(buildah from alpine:latest)
+	buildah config --workingdir /root $C
+	trap cleanup 2
+	buildah run $C -- sh -l <<- EOF
+		cat <<- EOF1 > /etc/apk/repositories
+			https://dl-cdn.alpinelinux.org/alpine/edge/main
+			https://dl-cdn.alpinelinux.org/alpine/edge/community
+			https://dl-cdn.alpinelinux.org/alpine/edge/testing
+			EOF1
+		apk update
+		apk upgrade
+		apk add \
+			busybox-initscripts \
+			dnsmasq \
+			ethtool \
+			iproute2 \
+			iptables \
+			keychain \
+			libbpf \
+			libnl3 \
+			libpcap \
+			lshw \
+			lua5.3 \
+			openrc \
+			openssh-client \
+			openssh-server \
+			pciutils \
+			sshfs \
+			tmux \
+			udev
+
+		chpasswd <<- EOF1
+			root:root
+			EOF1
+		rc-update add sysctl boot
+		rc-update add cgroups default
+		rc-update add crond default
+		rc-update add dnsmasq default
+		rc-update add sshd default
+		rc-update add iptables default
+		rc-update add networking default
+	EOF
+	buildah commit $C xdp-initrd
+	buildah rm $C
+}
+initrd_run() {
+	initrd="$1"; shift
+
+	podman image exists "xdp-initrd" || initrd_init
+	C=$(buildah from xdp-initrd)
+	buildah add $C $root/script/rootfs /
+	buildah add $C $root/work/rootfs / # 5.x.x
+	root=$root buildah unshare --mount R=$C -- sh <<- "EOF"
+		echo $root
+		echo $R
+		(cd $R; find . | cpio -oH newc) | gzip -1 > $root/work/rootfs.img
+		EOF
+	buildah rm $C
+}
+# ..............................................................................
+__tap_init() {
+	TAP="$1"; shift
+	BR="$1"; shift
+
+	ip tuntap add $TAP mode tap user m group m multi_queue
+	ip link set dev $TAP master $BR
+	ip link set dev $TAP up
+}
+network_init() {
+	RULE="POSTROUTING -t nat -s 192.168.6.100/32 -j MASQUERADE"
+
+	[ $(id -u) -ne 0 ] && die "NET_ADMIN cap is required, run as root"
+	[ -e /sys/class/net/br-wan ] && [ -e /sys/class/net/br-lan ] && (
+		__tap_init tap-wan br-wan
+		__tap_init tap-lan br-lan
+		iptables -C $RULE || iptables -I $RULE
+	) || die "bridges required:\n- br-wan\n- br-lan\n"
+}
+network_fini() {
+	ip link delete tap-wan
+	ip link delete tap-lan
+	iptables -D $RULE
+}
+# ..............................................................................
+qemu_run() {
+	[ -e /sys/class/net/tap-wan ] && [ -e /sys/class/net/tap-lan ] || \
+		die "taps required (run \`$0' network_init):\n- tap-wan\n- tap-lan\n"
+	kernel=$1; shift
+	initrd=$1; shift
+	qemu-system-x86_64 -s -enable-kvm -cpu host -m 1G \
+		-smp 2 \
+		-kernel "$kernel" \
+		-initrd "$initrd" \
+		-append 'nokaslr earlyprintk=serial console=tty0 console=ttyS0,115200n8 root=/dev/ram rdinit=/sbin/init' \
+		-device virtio-rng-pci \
+		-netdev tap,vhost=on,queues=16,id=eth0,ifname=tap-wan,script=no -device virtio-net-pci,mq=on,vectors=4,netdev=eth0 \
+		-netdev tap,vhost=on,queues=16,id=eth1,ifname=tap-lan,script=no -device virtio-net-pci,mq=on,vectors=4,netdev=eth1 \
+		-nographic
+}
+# ..............................................................................
+__tmux_rstack() {
+	win="$1"; shift;
+
+	tmux split-window -t "$sn:$win" -h "bash --rcfile <(echo 'echo $1; $1')"; shift
+	while (($#)); do
+		tmux split-window -t "$sn:$win" -v "bash --rcfile <(echo 'echo $1; $1')"; shift
+	done
+}
+tmux_run() {
+	sn=xdp
+	tmux attach-session -t "$sn" 2> /dev/null && return 0
+
+	tmux new-session -ds "$sn"
+	__tmux_rstack 0 \
+		"      sh -i script/cmd qemu_run" \
+		"$priv sh -i script/cmd client_run" \
+		"$priv sh -i script/cmd server_run" \
+
+	tmux bind-key h select-pane -L
+	tmux bind-key j select-pane -D
+	tmux bind-key k select-pane -U
+	tmux bind-key l select-pane -R
+	tmux attach-session -t "$sn"
+}
+"$@"
