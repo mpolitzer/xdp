@@ -1,0 +1,21 @@
+O=$(PWD)/.obj/
+print=quiet_
+
+buildfs := /usr
+kver    := 5.10.43
+kpath   := $(PWD)/work/linux-$(kver)
+rootfs  := $(PWD)/work/rootfs
+initrd  := $(rootfs).img
+image   := $(kpath)/arch/x86_64/boot/bzImage
+
+## alpine 4.19
+#initrd:=$(PWD)/work/rootfs-alpine.img
+#kpath:=$(PWD)/work/linux-v4.19.0-xdplua-hashmap-fixup-alpine
+#rootfs:=$(PWD)/work/rootfs-alpine
+#buildfs:=/usr
+
+## ubuntu
+#initrd:=$(PWD)/work/rootfs-ubuntu.img
+#kpath:=$(PWD)/work/linux-v4.19.0-xdplua-hashmap-fixup-ubuntu
+#rootfs:=$(PWD)/work/rootfs-ubuntu
+#buildfs:=$(PWD)/work/usr

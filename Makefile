@@ -1,5 +1,5 @@
 all: # default
--include .config.mk
+-include config.mk
 
 #-------------------------------------------------------------------------------
 fetch-rules := $(kver)
@@ -32,7 +32,9 @@ genl-echo-out   := $(rootfs)
 genl-echo-mpath := src/genl-echo
 genl-echo-kpath := $(kpath)
 #-------------------------------------------------------------------------------
-buildr:
+config.mk:
+	@cp script/config.mk.sample config.mk
+buildr: config.mk $(xdp-pass-out) $(xdp-drop-out) $(xdp-load-out)
 	@script/cmd buildr_run sh -lc 'make $(cmd)'
 buildr-prepare: $(kver)
 	@cp script/qemu.config $(kpath)/.config
@@ -54,10 +56,10 @@ buildr-rootfs: $(kver)
 	  INSTALL_MOD_PATH=$(rootfs) INSTALL_MOD_STRIP=1 modules_install \
 	  $(xdplua-flags)
 #-------------------------------------------------------------------------------
-$(initrd): $(xdp-pass-out) $(xdp-drop-out) $(xdp-load-out)
+$(initrd): $(buildr)
 	@sh script/cmd initrd_run $(initrd)
 #-------------------------------------------------------------------------------
-qemu: $(image) $(initrd)
+qemu: buildr $(image) $(initrd)
 	@sh script/cmd qemu_run $(image) $(initrd)
 #-------------------------------------------------------------------------------
 include script/c.mk

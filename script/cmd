@@ -158,10 +158,17 @@ __tap_init() {
 network_init() {
 	RULE="POSTROUTING -t nat -s 192.168.6.100/32 -j MASQUERADE"
 
-	[ $(id -u) -ne 0 ] && die "NET_ADMIN cap is required, run as root"
-	[ -e /sys/class/net/br-wan ] && [ -e /sys/class/net/br-lan ] && (
+	[ -e /sys/class/net/br-wan ] || (
+		ip link add name br-wan type bridge
 		__tap_init tap-wan br-wan
+	)
+
+	[ -e /sys/class/net/br-lan ] || (
+		ip link add name br-lan type bridge
 		__tap_init tap-lan br-lan
+	)
+
+	[ -e /sys/class/net/br-wan ] && [ -e /sys/class/net/br-lan ] && (
 		iptables -C $RULE || iptables -I $RULE
 	) || die "bridges required:\n- br-wan\n- br-lan\n"
 }
@@ -201,14 +208,10 @@ tmux_run() {
 
 	tmux new-session -ds "$sn"
 	__tmux_rstack 0 \
-		"      sh -i script/cmd qemu_run" \
+		"      make qemu" \
 		"$priv sh -i script/cmd client_run" \
 		"$priv sh -i script/cmd server_run" \
 
-	tmux bind-key h select-pane -L
-	tmux bind-key j select-pane -D
-	tmux bind-key k select-pane -U
-	tmux bind-key l select-pane -R
 	tmux attach-session -t "$sn"
 }
 "$@"
