@@ -14,6 +14,7 @@ With this we can guarantee that all traffic from `client` goes through the
 `xdp` machine. Tests can be designed from `client` to `server` or from `client`
 to the `internet`.
 
+```
 +--------+  br-wan  +-----+  br-lan  +--------+
 | server |<----+--->| xdp |<-------->| client |
 +--------+     |    +-----+          +--------+
@@ -23,6 +24,7 @@ to the `internet`.
 +----------+   |
 | internet |<--+
 +----------+
+```
 
 # eXpress Data Path (XDP)
 
@@ -90,6 +92,7 @@ following layout:
 ./script/cmd tmux_run
 ```
 
+```
 +---------------+
 | $    | xdp    |
 |      +--------+
@@ -97,3 +100,4 @@ following layout:
 |      +--------+
 |      | client |
 +---------------+
+```
